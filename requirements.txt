@@ -7,3 +7,4 @@ langsmith==0.3.11
 requests==2.32.4
 typing_extensions==4.13.2
 beautifulsoup4
+duckduckgo-search

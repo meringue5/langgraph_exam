@@ -23,6 +23,8 @@ from langgraph.types import Command
 import os
 import requests
 from langchain_core.tools import tool
+from duckduckgo_search import DDGS
+
 AOAI_ENDPOINT=os.getenv("AOAI_ENDPOINT")
 AOAI_API_KEY=os.getenv("AOAI_API_KEY")
 AOAI_DEPLOY_GPT4O=os.getenv("AOAI_DEPLOY_GPT4O")
@@ -62,23 +64,19 @@ def _extract_company(text: str) -> str:
 
 @tool
 def web_search(query: str) -> str:
-    """Search the web for the given query and return a summary of the top result."""
-    url = f"https://www.bing.com/search?q={query}"
+    """Search the web for the given query and return a summary of the top result using DuckDuckGo."""
     try:
-        resp = requests.get(url, timeout=5)
-        if resp.status_code == 200:
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(resp.text, "html.parser")
-            result = soup.find("li", {"class": "b_algo"})
-            if result:
-                title = result.find("h2").text if result.find("h2") else ""
-                snippet = result.find("p").text if result.find("p") else ""
-                return f"{title}: {snippet}"
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=1))
+            if results:
+                top = results[0]
+                title = top.get("title", "")
+                snippet = top.get("body", "")
+                url = top.get("href", "")
+                return f"{title}: {snippet} (URL: {url})"
             return "No results found."
-        else:
-            return f"Web search failed with status {resp.status_code}"
     except Exception as e:
-        return f"Web search error: {e}"
+        return f"DuckDuckGo search error: {e}"
 
 
 # --- Sub-agent implementations -------------------------------------------------
@@ -87,7 +85,7 @@ def web_search(query: str) -> str:
 def trump_vance_news_node(state: State) -> Command[Literal["supervisor"]]:
     user_msg = next((m for m in state["messages"] if hasattr(m, "content") and isinstance(m, HumanMessage)), None)
     query = "Donald Trump and J.D. Vance news"
-    web_result = web_search(query)
+    web_result = web_search.invoke(query)  # Use invoke instead of direct call
     log_tool_call("trump_vance_news", query, web_result, state)
     news = f"Web search result: {web_result}"
     return Command(
@@ -101,7 +99,7 @@ def company_info_node(state: State) -> Command[Literal["supervisor"]]:
     user_msg = next((m for m in state["messages"] if hasattr(m, "content") and isinstance(m, HumanMessage)), None)
     company = _extract_company(user_msg.content if user_msg else "")
     query = f"{company} stock price news"
-    web_result = web_search(query)
+    web_result = web_search.invoke(query)  # Use invoke instead of direct call
     log_tool_call("company_info", query, web_result, state)
     info = f"Web search result: {web_result}"
     return Command(
