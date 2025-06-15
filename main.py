@@ -78,7 +78,9 @@ def supervisor_node(state: State) -> Command[Literal["trump_vance_news", "compan
         logger.info("User requested conversation end.")
         return Command(goto=END)
 
-    if not any(word in last.content.lower() for word in ["stock", "price", "market"]):
+    if isinstance(last, HumanMessage) and not any(
+        word in last.content.lower() for word in ["stock", "price", "market"]
+    ):
         refusal = "I only answer questions related to the stock market."
         return Command(update={"messages": [AIMessage(content=refusal)]}, goto=END)
 
@@ -126,14 +128,22 @@ def main() -> None:
     builder.set_entry_point("supervisor")
     graph = builder.compile()
 
-    # example run; replace question variable to try other queries
-    question = "What is the impact of Trump and Vance on Tesla stock price?"
-    result = graph.invoke({"messages": [HumanMessage(content=question)], "step": 0})
+    conversation: List[BaseMessage] = []
+    while True:
+        question = input("User: ")
+        conversation.append(HumanMessage(content=question))
 
-    log_history(result["messages"])
-    for msg in result["messages"]:
-        if isinstance(msg, AIMessage):
-            print(msg.content)
+        result = graph.invoke({"messages": conversation, "step": 0})
+        new_messages = result["messages"][len(conversation) :]
+        conversation = result["messages"]
+
+        log_history(conversation)
+        for msg in new_messages:
+            if isinstance(msg, AIMessage):
+                print(msg.content)
+
+        if question.strip().upper() == "FINISH":
+            break
 
 
 if __name__ == "__main__":
