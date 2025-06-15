@@ -1,6 +1,6 @@
-
 #실습용 AOAI 환경변수 읽기
 import os
+import requests
 
 AOAI_ENDPOINT=os.getenv("AOAI_ENDPOINT")
 AOAI_API_KEY=os.getenv("AOAI_API_KEY")
@@ -9,14 +9,6 @@ AOAI_DEPLOY_GPT4O_MINI=os.getenv("AOAI_DEPLOY_GPT4O_MINI")
 AOAI_DEPLOY_EMBED_3_LARGE=os.getenv("AOAI_DEPLOY_EMBED_3_LARGE")
 AOAI_DEPLOY_EMBED_3_SMALL=os.getenv("AOAI_DEPLOY_EMBED_3_SMALL")
 AOAI_DEPLOY_EMBED_ADA=os.getenv("AOAI_DEPLOY_EMBED_ADA")
-
-print("AOAI_ENDPOINT:", AOAI_ENDPOINT)
-print("AOAI_API_KEY:", AOAI_API_KEY)
-print("AOAI_DEPLOY_GPT4O:", AOAI_DEPLOY_GPT4O)
-print("AOAI_DEPLOY_GPT4O_MINI:", AOAI_DEPLOY_GPT4O_MINI)
-print("AOAI_DEPLOY_EMBED_3_LARGE:", AOAI_DEPLOY_EMBED_3_LARGE)
-print("AOAI_DEPLOY_EMBED_3_SMALL:", AOAI_DEPLOY_EMBED_3_SMALL)
-print("AOAI_DEPLOY_EMBED_ADA:", AOAI_DEPLOY_EMBED_ADA)
 
 from langchain_openai import AzureChatOpenAI
 
@@ -76,8 +68,6 @@ def get_schedule():
 
 
 members = ["cafeteria", "schedule"]
-# Our team supervisor is an LLM node. It just picks the next agent to process
-# and decides when the work is completed
 options = members + ["FINISH"]
 
 system_prompt = (
@@ -91,14 +81,14 @@ system_prompt = (
 # Literally Router. Designates which node should be next with fixed options
 class Router(TypedDict):
     """Worker to route to next. If no workers needed, route to FINISH."""
-    next: Literal[*options]
+    next: Literal["cafeteria", "schedule", "FINISH"]
 
 class State(MessagesState):
     next: str
 
 # 입력: state — State 타입(내부에 메시지 리스트 있음)
 # 출력: Command 객체, 제네릭에 Literal로 members + "__end__" 가능한 값 제한
-def supervisor_node(state: State) -> Command[Literal[*members, "__end__"]]:
+def supervisor_node(state: State) -> Command[Literal["cafeteria", "schedule", "FINISH", "__end__"]]:
     # 시스템 메시지(역할 설명 등)를 맨 앞에 두고,
 	# 기존 대화 메시지 리스트(state["messages"])와 합쳐서 LLM에 보낼 messages 리스트 생성
     messages = [
@@ -108,7 +98,7 @@ def supervisor_node(state: State) -> Command[Literal[*members, "__end__"]]:
     response = llm.with_structured_output(Router).invoke(messages)
     goto = response["next"]
     if goto == "FINISH":
-        goto = END
+        goto = "__end__"
 
     return Command(goto=goto, update={"next": goto})
  
@@ -119,8 +109,11 @@ cafeteria_agent = create_react_agent(
     llm, tools=[get_cafeteria_menu], prompt="당신은 구내식당을 관리하는 영양사입니다. 사용자에게 이번 주의 식단을 알려줄 수 있습니다."
 )
 
-def cafeteria_node(state: State) -> Command[Literal["supervisor"]]:
+def cafeteria_node(state: State) -> Command[Literal["supervisor", "__end__"]]:
     result = cafeteria_agent.invoke(state)
+    goto = state.get("next", "supervisor")
+    if goto == "__end__":
+        return Command(goto="__end__")
     return Command(
         update={
             "messages": [
@@ -134,8 +127,11 @@ schedule_agent = create_react_agent(
     llm, tools=[get_schedule], prompt="당신은 사용자의 일정을 관리하는 비서입니다. 사용자에게 현재 남아있는 일정을 안내합니다."
 )
 
-def schedule_node(state: State) -> Command[Literal["supervisor"]]:
+def schedule_node(state: State) -> Command[Literal["supervisor", "__end__"]]:
     result = schedule_agent.invoke(state)
+    goto = state.get("next", "supervisor")
+    if goto == "__end__":
+        return Command(goto="__end__")
     return Command(
         update={
             "messages": [
@@ -173,7 +169,7 @@ def main():
 
         state["messages"].append({"role": "user", "content": user_input})
         for step in app.stream(state):
-            state = step.get("state", state)
+            state = step["state"]
             # Print only new assistant messages
             for msg in state["messages"]:
                 if isinstance(msg, dict) and msg.get("role") == "assistant":
