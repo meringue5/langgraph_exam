@@ -10,6 +10,14 @@ AOAI_DEPLOY_EMBED_3_LARGE=os.getenv("AOAI_DEPLOY_EMBED_3_LARGE")
 AOAI_DEPLOY_EMBED_3_SMALL=os.getenv("AOAI_DEPLOY_EMBED_3_SMALL")
 AOAI_DEPLOY_EMBED_ADA=os.getenv("AOAI_DEPLOY_EMBED_ADA")
 
+print("AOAI_ENDPOINT:", AOAI_ENDPOINT)
+print("AOAI_API_KEY:", AOAI_API_KEY)
+print("AOAI_DEPLOY_GPT4O:", AOAI_DEPLOY_GPT4O)
+print("AOAI_DEPLOY_GPT4O_MINI:", AOAI_DEPLOY_GPT4O_MINI)
+print("AOAI_DEPLOY_EMBED_3_LARGE:", AOAI_DEPLOY_EMBED_3_LARGE)
+print("AOAI_DEPLOY_EMBED_3_SMALL:", AOAI_DEPLOY_EMBED_3_SMALL)
+print("AOAI_DEPLOY_EMBED_ADA:", AOAI_DEPLOY_EMBED_ADA)
+
 from langchain_openai import AzureChatOpenAI
 
 llm = AzureChatOpenAI(
@@ -137,44 +145,44 @@ def schedule_node(state: State) -> Command[Literal["supervisor"]]:
         goto="supervisor",
     )
 
-    def main():
-        print("Welcome to the LangGraph Chatbot!")
-        print("Type 'exit' to quit.\n")
+def main():
+    print("Welcome to the LangGraph Chatbot!")
+    print("Type 'exit' to quit.\n")
 
-        # Initialize state
-        state = {"messages": [], "next": "supervisor"}
+    # Initialize state
+    state = {"messages": [], "next": "supervisor"}
 
-        # Build the graph
-        workflow = StateGraph(State)
-        workflow.add_node("supervisor", supervisor_node)
-        workflow.add_node("cafeteria", cafeteria_node)
-        workflow.add_node("schedule", schedule_node)
-        workflow.add_edge("supervisor", "cafeteria")
-        workflow.add_edge("supervisor", "schedule")
-        workflow.add_edge("supervisor", END)
-        workflow.add_edge("cafeteria", "supervisor")
-        workflow.add_edge("schedule", "supervisor")
-        workflow.set_entry_point("supervisor")
-        app = workflow.compile()
+    # Build the graph
+    workflow = StateGraph(State)
+    workflow.add_node("supervisor", supervisor_node)
+    workflow.add_node("cafeteria", cafeteria_node)
+    workflow.add_node("schedule", schedule_node)
+    workflow.add_edge("supervisor", "cafeteria")
+    workflow.add_edge("supervisor", "schedule")
+    workflow.add_edge("supervisor", END)
+    workflow.add_edge("cafeteria", "supervisor")
+    workflow.add_edge("schedule", "supervisor")
+    workflow.set_entry_point("supervisor")
+    app = workflow.compile()
 
-        while True:
-            user_input = input("You: ")
-            if user_input.strip().lower() == "exit":
-                print("Goodbye!")
-                break
+    while True:
+        user_input = input("You: ")
+        if user_input.strip().lower() == "exit":
+            print("Goodbye!")
+            break
 
-            state["messages"].append({"role": "user", "content": user_input})
-            for step in app.stream(state):
-                state = step["state"]
-                # Print only new assistant messages
-                for msg in state["messages"]:
-                    if isinstance(msg, dict) and msg.get("role") == "assistant":
-                        print(f"Bot: {msg['content']}")
-                    elif hasattr(msg, "name") and msg.name in members:
-                        print(f"{msg.name.capitalize()}: {msg.content}")
+        state["messages"].append({"role": "user", "content": user_input})
+        for step in app.stream(state):
+            state = step["state"]
+            # Print only new assistant messages
+            for msg in state["messages"]:
+                if isinstance(msg, dict) and msg.get("role") == "assistant":
+                    print(f"Bot: {msg['content']}")
+                elif hasattr(msg, "name") and msg.name in members:
+                    print(f"{msg.name.capitalize()}: {msg.content}")
 
-            # Remove all but the last message to keep context short
-            state["messages"] = state["messages"][-5:]
+        # Remove all but the last message to keep context short
+        state["messages"] = state["messages"][-5:]
 
-    if __name__ == "__main__":
-        main()
+if __name__ == "__main__":
+    main()
