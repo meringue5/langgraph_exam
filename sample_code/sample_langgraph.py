@@ -153,11 +153,7 @@ def main():
     workflow.add_node("supervisor", supervisor_node)
     workflow.add_node("cafeteria", cafeteria_node)
     workflow.add_node("schedule", schedule_node)
-    workflow.add_edge("supervisor", "cafeteria")
-    workflow.add_edge("supervisor", "schedule")
-    workflow.add_edge("supervisor", END)
-    workflow.add_edge("cafeteria", "supervisor")
-    workflow.add_edge("schedule", "supervisor")
+    # Remove all add_edge calls to let langgraph manage the routine
     workflow.set_entry_point("supervisor")
     app = workflow.compile()
 
