@@ -173,7 +173,7 @@ def main():
 
         state["messages"].append({"role": "user", "content": user_input})
         for step in app.stream(state):
-            state = step["state"]
+            state = step.get("state", state)
             # Print only new assistant messages
             for msg in state["messages"]:
                 if isinstance(msg, dict) and msg.get("role") == "assistant":
