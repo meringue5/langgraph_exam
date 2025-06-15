@@ -30,6 +30,7 @@ from langgraph.prebuilt import ToolNode
 from langchain_core.messages import HumanMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import create_react_agent
+import requests
 
 @tool
 def get_cafeteria_menu(day: str|None):
