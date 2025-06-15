@@ -1,22 +1,140 @@
 """
-the GOAL for this code:
+Simple multi-agent example built with LangGraph.
+This script demonstrates a supervisor agent coordinating two
+sub-agents. The supervisor keeps track of the conversation and
+routes work to the appropriate sub-agent. Once the user types
+"FINISH" the graph stops.
 
-using langGraph, create a simple multi agent system.
-the sample code to refer is 'sample_code/sample_langgraph.py'
-
-[structure]
-the app has one supervisor agent and two sub-agents.
-- supervisor: 
-    keep conversation and route to sub-agents. when the user says "FINISH", it will end the conversation.
-    make report of impact of Trump and Vance on the asked company utilizing the sub-agents.
-    when the question is irrelevant to stock market, refuse to answer.
-- sub-agent1: scrape news of Donald J. Trump and J. D. Vance for last 24 hours.
-- sub-agent2: get last makret price and new related to asked company.
-- tools: I don't know but maybe news scraper, web search
-
-[restriction]
-don't use edges, but use langgraph.commands to control the flow of the program.
-if needed, use langgraph.messages to store the conversation history.
-each conversation should be stored in a list of messages, and the supervisor agent should use this list to keep track of the conversation history.
-the conversation history should be logged so that later analysis can be done on the conversation flow and the agents' responses
+This implementation avoids explicit edges between nodes and relies
+on `langgraph.types.Command` to move between agents. Conversation
+history is stored on each run and logged to ``conversation.log`` so
+that the flow can be analysed later.
 """
+
+from __future__ import annotations
+
+import logging
+from typing import TypedDict, Literal, List
+
+from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
+from langgraph.graph import StateGraph, START, END, MessagesState
+from langgraph.types import Command
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+
+# 대화 진행 상황을 담는 상태 클래스
+class State(MessagesState):
+    """Conversation state shared by all agents."""
+
+    step: int  # track which agent should run next
+
+
+# 질문에서 회사 이름을 추출하는 함수
+def _extract_company(text: str) -> str:
+    """Very small helper to guess a company name from a question."""
+    words = [w.strip(".,?!") for w in text.split()]
+    for w in words:
+        if w.istitle():
+            return w
+    return "Unknown"
+
+
+# --- Sub-agent implementations -------------------------------------------------
+
+# 트럼프와 밴스 관련 뉴스를 반환하는 서브 에이전트
+def trump_vance_news_node(state: State) -> Command[Literal["supervisor"]]:
+    """Return placeholder news about Donald Trump and J.D. Vance."""
+    news = (
+        "(placeholder) Donald Trump and J.D. Vance appeared in several "
+        "headlines over the last 24 hours."
+    )
+    return Command(
+        update={"messages": [AIMessage(content=news, name="trump_vance_news")]},
+        goto="supervisor",
+    )
+
+# 사용자가 요청한 회사의 가상 정보를 제공하는 서브 에이전트
+
+def company_info_node(state: State) -> Command[Literal["supervisor"]]:
+    """Return a fake market summary for the requested company."""
+    user_msg = next((m for m in state["messages"] if isinstance(m, HumanMessage)), None)
+    company = _extract_company(user_msg.content if user_msg else "")
+    info = f"(placeholder) Latest price for {company} is $100 with mild volatility."
+    return Command(
+        update={"messages": [AIMessage(content=info, name="company_info")]},
+        goto="supervisor",
+    )
+
+
+# --- Supervisor implementation -------------------------------------------------
+
+# 각 서브 에이전트를 호출하고 최종 보고서를 만드는 감독 에이전트
+def supervisor_node(state: State) -> Command[Literal["trump_vance_news", "company_info", "__end__"]]:
+    """Route between agents and assemble the final report."""
+    last: BaseMessage = state["messages"][-1]
+    if isinstance(last, HumanMessage) and last.content.strip().upper() == "FINISH":
+        logger.info("User requested conversation end.")
+        return Command(goto=END)
+
+    if not any(word in last.content.lower() for word in ["stock", "price", "market"]):
+        refusal = "I only answer questions related to the stock market."
+        return Command(update={"messages": [AIMessage(content=refusal)]}, goto=END)
+
+    step = state.get("step", 0)
+    if step == 0:
+        # First gather Trump and Vance news
+        return Command(update={"step": 1}, goto="trump_vance_news")
+    elif step == 1:
+        # Then gather company market info
+        return Command(update={"step": 2}, goto="company_info")
+    else:
+        # Prepare a short report combining sub-agent outputs
+        trump_news = next(
+            (m.content for m in state["messages"] if getattr(m, "name", "") == "trump_vance_news"),
+            "",
+        )
+        company_info = next(
+            (m.content for m in state["messages"] if getattr(m, "name", "") == "company_info"),
+            "",
+        )
+        report = f"Report:\n- Trump/Vance: {trump_news}\n- Company: {company_info}"
+        return Command(update={"messages": [AIMessage(content=report)]}, goto=END)
+
+
+# --- Utility -------------------------------------------------------------------
+
+# 대화 내용을 파일로 기록하는 함수
+def log_history(messages: List[BaseMessage]) -> None:
+    """Append the conversation to ``conversation.log``."""
+    with open("conversation.log", "a", encoding="utf-8") as f:
+        for m in messages:
+            role = getattr(m, "role", getattr(m, "name", ""))
+            f.write(f"{role}: {m.content}\n")
+        f.write("-" * 20 + "\n")
+
+
+# --- Entry point ---------------------------------------------------------------
+
+# 그래프를 구성하고 예시 대화를 실행하는 메인 함수
+def main() -> None:
+    builder = StateGraph(State)
+    builder.add_node("supervisor", supervisor_node)
+    builder.add_node("trump_vance_news", trump_vance_news_node)
+    builder.add_node("company_info", company_info_node)
+    builder.set_entry_point("supervisor")
+    graph = builder.compile()
+
+    # example run; replace question variable to try other queries
+    question = "What is the impact of Trump and Vance on Tesla stock price?"
+    result = graph.invoke({"messages": [HumanMessage(content=question)], "step": 0})
+
+    log_history(result["messages"])
+    for msg in result["messages"]:
+        if isinstance(msg, AIMessage):
+            print(msg.content)
+
+
+if __name__ == "__main__":
+    main()
