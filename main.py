@@ -11,6 +11,25 @@ history is stored on each run and logged to ``conversation.log`` so
 that the flow can be analysed later.
 """
 
+import os
+import requests
+from langchain_core.tools import tool
+AOAI_ENDPOINT=os.getenv("AOAI_ENDPOINT")
+AOAI_API_KEY=os.getenv("AOAI_API_KEY")
+AOAI_DEPLOY_GPT4O=os.getenv("AOAI_DEPLOY_GPT4O")
+AOAI_DEPLOY_GPT4O_MINI=os.getenv("AOAI_DEPLOY_GPT4O_MINI")
+AOAI_DEPLOY_EMBED_3_LARGE=os.getenv("AOAI_DEPLOY_EMBED_3_LARGE")
+AOAI_DEPLOY_EMBED_3_SMALL=os.getenv("AOAI_DEPLOY_EMBED_3_SMALL")
+AOAI_DEPLOY_EMBED_ADA=os.getenv("AOAI_DEPLOY_EMBED_ADA")
+
+from langchain_openai import AzureChatOpenAI
+llm = AzureChatOpenAI(
+    azure_endpoint=AOAI_ENDPOINT,
+    azure_deployment=AOAI_DEPLOY_GPT4O_MINI,
+    api_version="2024-10-21",
+    api_key=AOAI_API_KEY
+)
+
 from __future__ import annotations
 
 import logging
@@ -23,12 +42,12 @@ from langgraph.types import Command
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-
 # 대화 진행 상황을 담는 상태 클래스
 class State(MessagesState):
     """Conversation state shared by all agents."""
 
     step: int  # track which agent should run next
+    thread_id: str  # context-awareness by thread id (supervisor only)
 
 
 # 질문에서 회사 이름을 추출하는 함수
@@ -41,15 +60,35 @@ def _extract_company(text: str) -> str:
     return "Unknown"
 
 
+@tool
+def web_search(query: str) -> str:
+    """Search the web for the given query and return a summary of the top result."""
+    url = f"https://www.bing.com/search?q={query}"
+    try:
+        resp = requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(resp.text, "html.parser")
+            result = soup.find("li", {"class": "b_algo"})
+            if result:
+                title = result.find("h2").text if result.find("h2") else ""
+                snippet = result.find("p").text if result.find("p") else ""
+                return f"{title}: {snippet}"
+            return "No results found."
+        else:
+            return f"Web search failed with status {resp.status_code}"
+    except Exception as e:
+        return f"Web search error: {e}"
+
+
 # --- Sub-agent implementations -------------------------------------------------
 
 # 트럼프와 밴스 관련 뉴스를 반환하는 서브 에이전트
 def trump_vance_news_node(state: State) -> Command[Literal["supervisor"]]:
-    """Return placeholder news about Donald Trump and J.D. Vance."""
-    news = (
-        "(placeholder) Donald Trump and J.D. Vance appeared in several "
-        "headlines over the last 24 hours."
-    )
+    user_msg = next((m for m in state["messages"] if hasattr(m, "content") and isinstance(m, HumanMessage)), None)
+    query = "Donald Trump and J.D. Vance news"
+    web_result = web_search(query)
+    news = f"Web search result: {web_result}"
     return Command(
         update={"messages": [AIMessage(content=news, name="trump_vance_news")]},
         goto="supervisor",
@@ -58,10 +97,11 @@ def trump_vance_news_node(state: State) -> Command[Literal["supervisor"]]:
 # 사용자가 요청한 회사의 가상 정보를 제공하는 서브 에이전트
 
 def company_info_node(state: State) -> Command[Literal["supervisor"]]:
-    """Return a fake market summary for the requested company."""
-    user_msg = next((m for m in state["messages"] if isinstance(m, HumanMessage)), None)
+    user_msg = next((m for m in state["messages"] if hasattr(m, "content") and isinstance(m, HumanMessage)), None)
     company = _extract_company(user_msg.content if user_msg else "")
-    info = f"(placeholder) Latest price for {company} is $100 with mild volatility."
+    query = f"{company} stock price news"
+    web_result = web_search(query)
+    info = f"Web search result: {web_result}"
     return Command(
         update={"messages": [AIMessage(content=info, name="company_info")]},
         goto="supervisor",
@@ -128,20 +168,19 @@ def main() -> None:
     builder.set_entry_point("supervisor")
     graph = builder.compile()
 
+    import uuid
+    thread_id = str(uuid.uuid4())
     conversation: List[BaseMessage] = []
     while True:
         question = input("User: ")
         conversation.append(HumanMessage(content=question))
-
-        result = graph.invoke({"messages": conversation, "step": 0})
+        result = graph.invoke({"messages": conversation, "step": 0, "thread_id": thread_id})
         new_messages = result["messages"][len(conversation) :]
         conversation = result["messages"]
-
         log_history(conversation)
         for msg in new_messages:
             if isinstance(msg, AIMessage):
                 print(msg.content)
-
         if question.strip().upper() == "FINISH":
             break
 
