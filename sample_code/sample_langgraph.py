@@ -80,24 +80,24 @@ system_prompt = (
 
 # Literally Router. Designates which node should be next with fixed options
 class Router(TypedDict):
-    """Worker to route to next. If no workers needed, route to FINISH."""
-    next: Literal["cafeteria", "schedule", "FINISH"]
+    """Worker to route to next. If no workers needed, route to END."""
+    next: Literal["cafeteria", "schedule", "END"]
 
 class State(MessagesState):
     next: str
 
 # 입력: state — State 타입(내부에 메시지 리스트 있음)
 # 출력: Command 객체, 제네릭에 Literal로 members + "__end__" 가능한 값 제한
-def supervisor_node(state: State) -> Command[Literal["cafeteria", "schedule", "FINISH", "__end__"]]:
+def supervisor_node(state: State) -> Command[Literal["cafeteria", "schedule", "END", "__end__"]]:
     # 시스템 메시지(역할 설명 등)를 맨 앞에 두고,
-	# 기존 대화 메시지 리스트(state["messages"])와 합쳐서 LLM에 보낼 messages 리스트 생성
+    # 기존 대화 메시지 리스트(state["messages"])와 합쳐서 LLM에 보낼 messages 리스트 생성
     messages = [
         {"role": "system", "content": system_prompt},
     ] + state["messages"]
-    # Router 타입으로 구조화된 출력(즉, next 필드에 "cafeteria", "schedule", "FINISH" 중 하나 포함)을 기대
+    # Router 타입으로 구조화된 출력(즉, next 필드에 "cafeteria", "schedule", "END" 중 하나 포함)을 기대
     response = llm.with_structured_output(Router).invoke(messages)
     goto = response["next"]
-    if goto == "FINISH":
+    if goto == "END":
         goto = "__end__"
 
     return Command(goto=goto, update={"next": goto})
