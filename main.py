@@ -11,6 +11,15 @@ history is stored on each run and logged to ``conversation.log`` so
 that the flow can be analysed later.
 """
 
+from __future__ import annotations
+
+import logging
+from typing import TypedDict, Literal, List
+
+from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
+from langgraph.graph import StateGraph, START, END, MessagesState
+from langgraph.types import Command
+
 import os
 import requests
 from langchain_core.tools import tool
@@ -29,15 +38,6 @@ llm = AzureChatOpenAI(
     api_version="2024-10-21",
     api_key=AOAI_API_KEY
 )
-
-from __future__ import annotations
-
-import logging
-from typing import TypedDict, Literal, List
-
-from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
-from langgraph.graph import StateGraph, START, END, MessagesState
-from langgraph.types import Command
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
