@@ -88,6 +88,7 @@ def trump_vance_news_node(state: State) -> Command[Literal["supervisor"]]:
     user_msg = next((m for m in state["messages"] if hasattr(m, "content") and isinstance(m, HumanMessage)), None)
     query = "Donald Trump and J.D. Vance news"
     web_result = web_search(query)
+    log_tool_call("trump_vance_news", query, web_result, state)
     news = f"Web search result: {web_result}"
     return Command(
         update={"messages": [AIMessage(content=news, name="trump_vance_news")]},
@@ -101,6 +102,7 @@ def company_info_node(state: State) -> Command[Literal["supervisor"]]:
     company = _extract_company(user_msg.content if user_msg else "")
     query = f"{company} stock price news"
     web_result = web_search(query)
+    log_tool_call("company_info", query, web_result, state)
     info = f"Web search result: {web_result}"
     return Command(
         update={"messages": [AIMessage(content=info, name="company_info")]},
@@ -141,8 +143,10 @@ def supervisor_node(state: State) -> Command[Literal["trump_vance_news", "compan
             (m.content for m in state["messages"] if getattr(m, "name", "") == "company_info"),
             "",
         )
-        report = f"Report:\n- Trump/Vance: {trump_news}\n- Company: {company_info}"
-        return Command(update={"messages": [AIMessage(content=report)]}, goto=END)
+        # Use LLM to summarize the results
+        summary_prompt = f"Summarize the following information for the user.\nTrump/Vance: {trump_news}\nCompany: {company_info}"
+        summary = llm.invoke([HumanMessage(content=summary_prompt)])
+        return Command(update={"messages": [AIMessage(content=summary.content)]}, goto=END)
 
 
 # --- Utility -------------------------------------------------------------------
@@ -155,6 +159,10 @@ def log_history(messages: List[BaseMessage]) -> None:
             role = getattr(m, "role", getattr(m, "name", ""))
             f.write(f"{role}: {m.content}\n")
         f.write("-" * 20 + "\n")
+
+def log_tool_call(agent: str, query: str, result: str, state: State) -> None:
+    with open("tool_calls.log", "a", encoding="utf-8") as f:
+        f.write(f"[{agent}] Query: {query}\nResult: {result}\nThread: {getattr(state, 'thread_id', 'N/A')}\n{'-'*20}\n")
 
 
 # --- Entry point ---------------------------------------------------------------
