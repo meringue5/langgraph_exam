@@ -21,7 +21,13 @@
 
 ## 설치 및 실행 방법
 
-### 1. 환경 변수 설정
+### 1. 의존성 설치
+아래 명령어로 프로젝트에서 필요한 패키지를 설치합니다.
+```bash
+pip install -r requirements.txt
+```
+
+### 2. 환경 변수 설정
 프로젝트를 실행하기 전에 아래 환경변수를 설정합니다. 이는 Azure OpenAI API 키 및 배포 ID를 포함합니다.
 
 - `AOAI_ENDPOINT`: Azure OpenAI API의 엔드포인트
