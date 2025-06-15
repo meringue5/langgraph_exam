@@ -1,6 +1,6 @@
+
 #실습용 AOAI 환경변수 읽기
 import os
-import requests
 
 AOAI_ENDPOINT=os.getenv("AOAI_ENDPOINT")
 AOAI_API_KEY=os.getenv("AOAI_API_KEY")
@@ -68,6 +68,8 @@ def get_schedule():
 
 
 members = ["cafeteria", "schedule"]
+# Our team supervisor is an LLM node. It just picks the next agent to process
+# and decides when the work is completed
 options = members + ["FINISH"]
 
 system_prompt = (
@@ -80,25 +82,25 @@ system_prompt = (
 
 # Literally Router. Designates which node should be next with fixed options
 class Router(TypedDict):
-    """Worker to route to next. If no workers needed, route to END."""
-    next: Literal["cafeteria", "schedule", "END"]
+    """Worker to route to next. If no workers needed, route to FINISH."""
+    next: Literal[*options]
 
 class State(MessagesState):
     next: str
 
 # 입력: state — State 타입(내부에 메시지 리스트 있음)
 # 출력: Command 객체, 제네릭에 Literal로 members + "__end__" 가능한 값 제한
-def supervisor_node(state: State) -> Command[Literal["cafeteria", "schedule", "END", "__end__"]]:
+def supervisor_node(state: State) -> Command[Literal[*members, "__end__"]]:
     # 시스템 메시지(역할 설명 등)를 맨 앞에 두고,
-    # 기존 대화 메시지 리스트(state["messages"])와 합쳐서 LLM에 보낼 messages 리스트 생성
+	# 기존 대화 메시지 리스트(state["messages"])와 합쳐서 LLM에 보낼 messages 리스트 생성
     messages = [
         {"role": "system", "content": system_prompt},
     ] + state["messages"]
-    # Router 타입으로 구조화된 출력(즉, next 필드에 "cafeteria", "schedule", "END" 중 하나 포함)을 기대
+    # Router 타입으로 구조화된 출력(즉, next 필드에 "cafeteria", "schedule", "FINISH" 중 하나 포함)을 기대
     response = llm.with_structured_output(Router).invoke(messages)
     goto = response["next"]
-    if goto == "END":
-        goto = "__end__"
+    if goto == "FINISH":
+        goto = END
 
     return Command(goto=goto, update={"next": goto})
  
@@ -109,11 +111,8 @@ cafeteria_agent = create_react_agent(
     llm, tools=[get_cafeteria_menu], prompt="당신은 구내식당을 관리하는 영양사입니다. 사용자에게 이번 주의 식단을 알려줄 수 있습니다."
 )
 
-def cafeteria_node(state: State) -> Command[Literal["supervisor", "__end__"]]:
+def cafeteria_node(state: State) -> Command[Literal["supervisor"]]:
     result = cafeteria_agent.invoke(state)
-    goto = state.get("next", "supervisor")
-    if goto == "__end__":
-        return Command(goto="__end__")
     return Command(
         update={
             "messages": [
@@ -127,11 +126,8 @@ schedule_agent = create_react_agent(
     llm, tools=[get_schedule], prompt="당신은 사용자의 일정을 관리하는 비서입니다. 사용자에게 현재 남아있는 일정을 안내합니다."
 )
 
-def schedule_node(state: State) -> Command[Literal["supervisor", "__end__"]]:
+def schedule_node(state: State) -> Command[Literal["supervisor"]]:
     result = schedule_agent.invoke(state)
-    goto = state.get("next", "supervisor")
-    if goto == "__end__":
-        return Command(goto="__end__")
     return Command(
         update={
             "messages": [
@@ -141,40 +137,26 @@ def schedule_node(state: State) -> Command[Literal["supervisor", "__end__"]]:
         goto="supervisor",
     )
 
+
 def main():
-    print("Welcome to the LangGraph Chatbot!")
-    print("Type 'exit' to quit.\n")
+    builder = StateGraph(State)
+    builder.add_edge(START, "supervisor")
+    builder.add_node("supervisor", supervisor_node)
+    builder.add_node("cafeteria", cafeteria_node)
+    builder.add_node("schedule", schedule_node)
+    graph = builder.compile()
 
-    # Initialize state
-    state = {"messages": [], "next": "supervisor"}
+    # try:
+    #     display(Image(graph.get_graph().draw_mermaid_png()))
+    # except Exception:
+    #     # This requires some extra dependencies and is optional
+    #     pass
 
-    # Build the graph
-    workflow = StateGraph(State)
-    workflow.add_node("supervisor", supervisor_node)
-    workflow.add_node("cafeteria", cafeteria_node)
-    workflow.add_node("schedule", schedule_node)
-    # Remove all add_edge calls to let langgraph manage the routine
-    workflow.set_entry_point("supervisor")
-    app = workflow.compile()
-
-    while True:
-        user_input = input("You: ")
-        if user_input.strip().lower() == "exit":
-            print("Goodbye!")
-            break
-
-        state["messages"].append({"role": "user", "content": user_input})
-        for step in app.stream(state):
-            state = step["state"]
-            # Print only new assistant messages
-            for msg in state["messages"]:
-                if isinstance(msg, dict) and msg.get("role") == "assistant":
-                    print(f"Bot: {msg['content']}")
-                elif hasattr(msg, "name") and msg.name in members:
-                    print(f"{msg.name.capitalize()}: {msg.content}")
-
-        # Remove all but the last message to keep context short
-        state["messages"] = state["messages"][-5:]
+    for s in graph.stream(
+        {"messages": [("user", "월요일 식단이 궁금해")]}, subgraphs=True
+    ):
+        print(s)
+        print("----")
 
 if __name__ == "__main__":
     main()
