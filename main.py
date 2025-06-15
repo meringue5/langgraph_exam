@@ -21,9 +21,9 @@ from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.types import Command
 
 import os
-import requests
-from langchain_core.tools import tool
-from duckduckgo_search import DDGS
+from langchain_openai import AzureChatOpenAI
+import time
+import json
 
 AOAI_ENDPOINT=os.getenv("AOAI_ENDPOINT")
 AOAI_API_KEY=os.getenv("AOAI_API_KEY")
@@ -33,7 +33,6 @@ AOAI_DEPLOY_EMBED_3_LARGE=os.getenv("AOAI_DEPLOY_EMBED_3_LARGE")
 AOAI_DEPLOY_EMBED_3_SMALL=os.getenv("AOAI_DEPLOY_EMBED_3_SMALL")
 AOAI_DEPLOY_EMBED_ADA=os.getenv("AOAI_DEPLOY_EMBED_ADA")
 
-from langchain_openai import AzureChatOpenAI
 llm = AzureChatOpenAI(
     azure_endpoint=AOAI_ENDPOINT,
     azure_deployment=AOAI_DEPLOY_GPT4O_MINI,
@@ -62,32 +61,14 @@ def _extract_company(text: str) -> str:
     return "Unknown"
 
 
-@tool
-def web_search(query: str) -> str:
-    """Search the web for the given query and return a summary of the top result using DuckDuckGo."""
-    try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=1))
-            if results:
-                top = results[0]
-                title = top.get("title", "")
-                snippet = top.get("body", "")
-                url = top.get("href", "")
-                return f"{title}: {snippet} (URL: {url})"
-            return "No results found."
-    except Exception as e:
-        return f"DuckDuckGo search error: {e}"
-
-
 # --- Sub-agent implementations -------------------------------------------------
 
 # 트럼프와 밴스 관련 뉴스를 반환하는 서브 에이전트
 def trump_vance_news_node(state: State) -> Command[Literal["supervisor"]]:
     user_msg = next((m for m in state["messages"] if hasattr(m, "content") and isinstance(m, HumanMessage)), None)
-    query = "Donald Trump and J.D. Vance news"
-    web_result = web_search.invoke(query)  # Use invoke instead of direct call
-    log_tool_call("trump_vance_news", query, web_result, state)
-    news = f"Web search result: {web_result}"
+    query = "Donald Trump and J.D. Vance news. Please search the web and summarize the latest news about them."
+    llm_result = llm.invoke([HumanMessage(content=query)])
+    news = f"LLM web search result: {llm_result.content}"
     return Command(
         update={"messages": [AIMessage(content=news, name="trump_vance_news")]},
         goto="supervisor",
@@ -98,10 +79,9 @@ def trump_vance_news_node(state: State) -> Command[Literal["supervisor"]]:
 def company_info_node(state: State) -> Command[Literal["supervisor"]]:
     user_msg = next((m for m in state["messages"] if hasattr(m, "content") and isinstance(m, HumanMessage)), None)
     company = _extract_company(user_msg.content if user_msg else "")
-    query = f"{company} stock price news"
-    web_result = web_search.invoke(query)  # Use invoke instead of direct call
-    log_tool_call("company_info", query, web_result, state)
-    info = f"Web search result: {web_result}"
+    query = f"Please search the web and summarize the latest stock price and news for {company}."
+    llm_result = llm.invoke([HumanMessage(content=query)])
+    info = f"LLM web search result: {llm_result.content}"
     return Command(
         update={"messages": [AIMessage(content=info, name="company_info")]},
         goto="supervisor",
@@ -112,18 +92,37 @@ def company_info_node(state: State) -> Command[Literal["supervisor"]]:
 
 # 각 서브 에이전트를 호출하고 최종 보고서를 만드는 감독 에이전트
 def supervisor_node(state: State) -> Command[Literal["trump_vance_news", "company_info", "__end__"]]:
-    """Route between agents and assemble the final report."""
     last: BaseMessage = state["messages"][-1]
+    memory = load_memory()
+    thread_id = getattr(state, "thread_id", "default")
+    user_question = ""
+    for m in reversed(state["messages"]):
+        if isinstance(m, HumanMessage):
+            user_question = m.content.strip()
+            break
+    now = time.time()
+    # Check memory for similar question
+    for q, v in memory.get(thread_id, {}).items():
+        if q == user_question:
+            ago = int((now - v["ts"]) // 3600)
+            answer = v["answer"]
+            msg = f"You asked this {ago} hour(s) ago. My answer was:\n{answer}\nIf you want a new search, say 'search again'."
+            return Command(update={"messages": [AIMessage(content=msg)]}, goto=END)
+    if user_question.lower().strip() == "search again":
+        # Remove last question from memory to force new search
+        for q in list(memory.get(thread_id, {})):
+            if q == user_question:
+                del memory[thread_id][q]
+        save_memory(memory)
+        return Command(update={"messages": [AIMessage(content="Okay, I'll search again. Please ask your question.")]}, goto=END)
     if isinstance(last, HumanMessage) and last.content.strip().upper() == "FINISH":
         logger.info("User requested conversation end.")
         return Command(goto=END)
-
     if isinstance(last, HumanMessage) and not any(
         word in last.content.lower() for word in ["stock", "price", "market"]
     ):
         refusal = "I only answer questions related to the stock market."
         return Command(update={"messages": [AIMessage(content=refusal)]}, goto=END)
-
     step = state.get("step", 0)
     if step == 0:
         # First gather Trump and Vance news
@@ -144,6 +143,11 @@ def supervisor_node(state: State) -> Command[Literal["trump_vance_news", "compan
         # Use LLM to summarize the results
         summary_prompt = f"Summarize the following information for the user.\nTrump/Vance: {trump_news}\nCompany: {company_info}"
         summary = llm.invoke([HumanMessage(content=summary_prompt)])
+        # Save answer to memory
+        if thread_id not in memory:
+            memory[thread_id] = {}
+        memory[thread_id][user_question] = {"answer": summary.content, "ts": now}
+        save_memory(memory)
         return Command(update={"messages": [AIMessage(content=summary.content)]}, goto=END)
 
 
@@ -158,9 +162,16 @@ def log_history(messages: List[BaseMessage]) -> None:
             f.write(f"{role}: {m.content}\n")
         f.write("-" * 20 + "\n")
 
-def log_tool_call(agent: str, query: str, result: str, state: State) -> None:
-    with open("tool_calls.log", "a", encoding="utf-8") as f:
-        f.write(f"[{agent}] Query: {query}\nResult: {result}\nThread: {getattr(state, 'thread_id', 'N/A')}\n{'-'*20}\n")
+MEMORY_FILE = "memory_saver.json"
+def load_memory():
+    try:
+        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+def save_memory(memory):
+    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(memory, f, ensure_ascii=False, indent=2)
 
 
 # --- Entry point ---------------------------------------------------------------
