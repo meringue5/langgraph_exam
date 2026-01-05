@@ -24,26 +24,18 @@
 ### 1. 의존성 설치
 아래 명령어로 프로젝트에서 필요한 패키지를 설치합니다.
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 ### 2. 환경 변수 설정
 프로젝트를 실행하기 전에 아래 환경변수를 설정합니다. 이는 Azure OpenAI API 키 및 배포 ID를 포함합니다.
+.env.example 참조
 
 - `AOAI_ENDPOINT`: Azure OpenAI API의 엔드포인트
 - `AOAI_API_KEY`: Azure OpenAI API의 접근 키
 - `AOAI_DEPLOY_GPT4O`: GPT-4 모델 배포 이름
 - `AOAI_DEPLOY_EMBED_ADA`: 임베딩 모델 배포 이름
 
-환경 변수 설정 예시 (Linux/Mac):
-```bash
-export AOAI_ENDPOINT=
-export AOAI_API_KEY=
-export AOAI_DEPLOY_GPT4O="gpt-4o"
-export AOAI_DEPLOY_GPT4O_MINI="gpt-4o-mini"
-export AOAI_DEPLOY_EMBED_3_LARGE="text-embedding-3-large"
-export AOAI_DEPLOY_EMBED_3_SMALL="text-embedding-3-small"
-export AOAI_DEPLOY_EMBED_ADA="text-embedding-ada-002"
 
 #### 5. 예제 코드
 ```markdown

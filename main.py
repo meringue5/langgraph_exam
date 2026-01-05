@@ -21,9 +21,12 @@ from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.types import Command
 
 import os
+from dotenv import load_dotenv
 from langchain_openai import AzureChatOpenAI
 import time
 import json
+
+load_dotenv()
 
 AOAI_ENDPOINT=os.getenv("AOAI_ENDPOINT")
 AOAI_API_KEY=os.getenv("AOAI_API_KEY")
@@ -63,8 +66,8 @@ def _extract_company(text: str) -> str:
 
 # --- Sub-agent implementations -------------------------------------------------
 
-# 트럼프와 밴스 관련 뉴스를 반환하는 서브 에이전트
 def trump_vance_news_node(state: State) -> Command[Literal["supervisor"]]:
+    ''' 트럼프와 밴스 관련 뉴스를 반환하는 서브 에이전트 '''
     user_msg = next((m for m in state["messages"] if hasattr(m, "content") and isinstance(m, HumanMessage)), None)
     query = "Donald Trump and J.D. Vance news. Please search the web and summarize the latest news about them."
     llm_result = llm.invoke([HumanMessage(content=query)])
@@ -74,9 +77,8 @@ def trump_vance_news_node(state: State) -> Command[Literal["supervisor"]]:
         goto="supervisor",
     )
 
-# 사용자가 요청한 회사의 가상 정보를 제공하는 서브 에이전트
-
 def company_info_node(state: State) -> Command[Literal["supervisor"]]:
+    ''' 사용자가 요청한 회사의 가상 정보를 제공하는 서브 에이전트 '''
     user_msg = next((m for m in state["messages"] if hasattr(m, "content") and isinstance(m, HumanMessage)), None)
     company = _extract_company(user_msg.content if user_msg else "")
     query = f"Please search the web and summarize the latest stock price and news for {company}."
@@ -87,11 +89,11 @@ def company_info_node(state: State) -> Command[Literal["supervisor"]]:
         goto="supervisor",
     )
 
-
-# --- Supervisor implementation -------------------------------------------------
-
-# 각 서브 에이전트를 호출하고 최종 보고서를 만드는 감독 에이전트
 def supervisor_node(state: State) -> Command[Literal["trump_vance_news", "company_info", "__end__"]]:
+    '''
+    Supervisor implementation
+    각 서브 에이전트를 호출하고 최종 보고서를 만드는 감독 에이전트
+    '''
     last: BaseMessage = state["messages"][-1]
     memory = load_memory()
     thread_id = getattr(state, "thread_id", "default")
@@ -156,6 +158,7 @@ def supervisor_node(state: State) -> Command[Literal["trump_vance_news", "compan
 # 대화 내용을 파일로 기록하는 함수
 def log_history(messages: List[BaseMessage]) -> None:
     """Append the conversation to ``conversation.log``."""
+    
     with open("conversation.log", "a", encoding="utf-8") as f:
         for m in messages:
             role = getattr(m, "role", getattr(m, "name", ""))
@@ -164,12 +167,14 @@ def log_history(messages: List[BaseMessage]) -> None:
 
 MEMORY_FILE = "memory_saver.json"
 def load_memory():
+    ''' Load conversation history from json file '''
     try:
         with open(MEMORY_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}
 def save_memory(memory):
+    ''' save conversation history to json file '''
     with open(MEMORY_FILE, "w", encoding="utf-8") as f:
         json.dump(memory, f, ensure_ascii=False, indent=2)
 
